@@ -1,3 +1,6 @@
+# Flux 6
+If you're here before December 31st, 2020, I congratulate you.
+
 <center>
   <a href="#"><img src="https://i.imgur.com/hDqP9sV.png" alt="Logo"></a>
 </center>
