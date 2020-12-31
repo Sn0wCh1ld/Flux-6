@@ -1,5 +1,5 @@
 # Flux 6
-If you're here before December 31st, 2020, I congratulate you.
+Flux 6 is a continuation of my annual fake jailbreak prank, but this time it's not fake. It's based on Odyssey, but still includes everyone's least favorite meme, the rickroll!
 
 <center>
   <a href="#"><img src="https://i.imgur.com/hDqP9sV.png" alt="Logo"></a>
