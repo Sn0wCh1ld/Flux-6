@@ -390,7 +390,9 @@ class ViewController: UIViewController, ElectraUI {
                             self.progressBar.setProgress(1, animated: true)
                             self.progressLabel.text = "Unable to get tfp0. Happy New Year!"
                             
-                            self.selfPromo()
+                            if self.rickRollSwitch.isOn {
+                                self.selfPromo()
+                            }
                         }
                         return
                         // fatalError("Unable to get tfp0")
@@ -443,7 +445,11 @@ class ViewController: UIViewController, ElectraUI {
                             }
                         })*/
                     }
-                    self.selfPromo()
+                    
+                    if self.rickRollSwitch.isOn {
+                        self.selfPromo()
+                    }
+                    
                     return
                 }
             }
