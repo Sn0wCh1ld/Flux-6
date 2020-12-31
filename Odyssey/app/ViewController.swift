@@ -9,6 +9,14 @@
 import UIKit
 import MachO.dyld_images
 
+import AVFoundation
+import AVKit
+
+enum JailbreakError: Error {
+    case tpf0Error
+    case electraError
+}
+
 class ViewController: UIViewController, ElectraUI {
 
     var electra: Electra?
@@ -16,165 +24,249 @@ class ViewController: UIViewController, ElectraUI {
         
     fileprivate var scrollAnimationClosures: [() -> Void] = []
     private var popClosure: DispatchWorkItem?
+        
+    var enableTweaksSwitch = PersistentSwitch(key: "enableTweaks", defaultValue: true)
+    var restoreRootfsSwitch = PersistentSwitch(key: "restoreRootFS", defaultValue: false)
+    var logSwitch = PersistentSwitch(key: "showLog", defaultValue: false)
+    var nonceSetter: TextButton!
     
-    @IBOutlet weak var backgroundImage: UIImageView!
-    @IBOutlet weak var backgroundOverlay: UIView!
+    var rickRollSwitch = PersistentSwitch(key: "rickroll", defaultValue: true)
     
-    @IBOutlet weak var stackView: UIStackView!
-
-    @IBOutlet weak var jailbreakButton: UIButton?
-    @IBOutlet weak var progressRing: UICircularProgressRing!
-    @IBOutlet weak var containerView: UIView!
-    @IBOutlet weak var vibrancyView: UIVisualEffectView!
-    @IBOutlet weak var updateOdysseyView: UIVisualEffectView!
-    @IBOutlet weak var scrollView: UIScrollView!
+    var actionCard = ActionCard()
+    var jailbreakButton = JailbreakButton()
     
-    @IBOutlet weak var switchesView: PanelStackView!
+    let progressBar = FluxProgressView()
+    let progressLabel = UILabel()
     
-    @IBOutlet weak var themeCopyrightButton: UIButton!
+    let videoView = UIView()
+    let rickRollPlayer = AVPlayer(url: URL(fileURLWithPath: Bundle.main.path(forResource: "dQw", ofType: "mp4")!))
     
-    @IBOutlet weak var enableTweaksSwitch: UISwitch!
-    @IBOutlet weak var restoreRootfsSwitch: UISwitch!
-    @IBOutlet weak var logSwitch: UISwitch!
-    @IBOutlet weak var nonceSetter: TextButton!
+    var used = UserDefaults.standard.bool(forKey: "usedOnce")
     
-    @IBOutlet weak var containerViewYConstraint: NSLayoutConstraint!
-    @IBOutlet weak var jailbreakButtonHeightConstraint: NSLayoutConstraint!
-    
-    var themeImagePicker: ThemeImagePicker!
-    
-    var activeColourDefault = ""
-    let colorPickerViewController = ColorPickerViewController()
-    
-    private var currentView: (UIView & PanelView)?
-
     override func viewDidLoad() {
         super.viewDidLoad()
-
-        //This will reset user defaults, used it a lot for testing
+        
+        // This will reset user defaults, used it a lot for testing
         /*
         if let bundleID = Bundle.main.bundleIdentifier {
             UserDefaults.standard.removePersistentDomain(forName: bundleID)
         }
         */
         
-        NotificationCenter.default.addObserver(self, selector: #selector(self.showAlderisPicker(_:)), name: AlderisButton.showAlderisName, object: nil)
-        colorPickerViewController.delegate = self
- 
-        if self.view.bounds.height <= 667 {
-            stackView.spacing = 40
-            if self.view.bounds.height <= 568 {
-                stackView.spacing = 20
-                self.containerView.transform = CGAffineTransform(scaleX: 0.90, y: 0.90)
-                self.jailbreakButtonHeightConstraint.constant = 125
-            }
-        }
+        self.view.layer.insertSublayer(createGradient(), at: 0)
         
-        currentView = switchesView
-        nonceSetter.delegate = NonceManager.shared
+        setUpRickAstley()
+        setUpCreditButtons()
+        setUpStatusViews()
+        setUpActionCard()
         
-        var formatter = UICircularProgressRingFormatter()
-        formatter.showValueInteger = false
-        formatter.valueIndicator = "Jailbreak"
+        // nonceSetter.delegate = NonceManager.shared
         
         if #available(iOS 13.5.1, *) {
-            jailbreakButton?.isEnabled = false
-            formatter.valueIndicator = "Unsupported"
+            jailbreakButton.isEnabled = true
+            jailbreakButton.setTitle("Jailbreak", for: .normal)
+
             if let allProcStr = UIPasteboard.general.string {
                 let prefix = "allproc: "
                 if allProcStr.hasPrefix(prefix) {
                     let allProcHex = String(allProcStr.dropFirst(prefix.count + 2))
                     if let allProc = UInt64(allProcHex, radix: 16) {
                         self.allProc = allProc
-                        jailbreakButton?.isEnabled = true
-                        formatter.valueIndicator = "Jailbreak"
+                        jailbreakButton.isEnabled = true
+                        jailbreakButton.setTitle("Jailbreak", for: .normal)
                     }
                 }
             }
         }
         
         if isJailbroken() {
-            jailbreakButton?.isEnabled = false
-            formatter.valueIndicator = "Jailbroken"
+            jailbreakButton.isEnabled = false
+            jailbreakButton.setTitle("Happy New Year!", for: .normal)
         }
-        
-        progressRing.valueFormatter = formatter
-        
-        let updateTapGestureRecogniser = UITapGestureRecognizer(target: self, action: #selector(shouldOpenUpdateLink))
-        updateOdysseyView.addGestureRecognizer(updateTapGestureRecogniser)
-        
-        AppVersionManager.shared.doesApplicationRequireUpdate { result in
-            switch result {
-            case .failure(let error):
-                print(error)
-                return
-            
-            case .success(let updateRequired):
-                if (updateRequired) {
-                    DispatchQueue.main.async {
-                        UIView.animate(withDuration: 0.5) {
-                            self.updateOdysseyView.isHidden = false
-                        }
-                    }
-                }
-            }
-        }
-        
-        self.themeImagePicker = ThemeImagePicker(presentationController: self, delegate: self)
-        
-        NotificationCenter.default.addObserver(self, selector: #selector(updateTheme), name: ThemesManager.themeChangeNotification, object: nil)
-        self.updateTheme()
-        // Do any additional setup after loading the view.
     }
     
-    @objc func updateTheme() {
-        let custom = UserDefaults.standard.string(forKey: "theme") == "custom"
-        let customColour = UserDefaults.standard.string(forKey: "theme") == "customColourTheme"
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        
+        self.actionCard.isExpanded = false
+        DispatchQueue.main.async {
+            self.actionCard.isExpanded = true
+        }
+    }
+    
+    func setUpRickAstley() {
+        let playerLayer = AVPlayerLayer(player: rickRollPlayer)
+        playerLayer.videoGravity = AVLayerVideoGravity.resizeAspectFill
+        playerLayer.frame = self.view.bounds
+        videoView.layer.addSublayer(playerLayer)
+        
+        videoView.translatesAutoresizingMaskIntoConstraints = false
+        
+        videoView.alpha = 0
+        
+        self.view.addSubview(videoView)
+        
+        videoView.topAnchor.constraint(equalTo: self.view.topAnchor).isActive = true
+        videoView.bottomAnchor.constraint(equalTo: self.view.bottomAnchor).isActive = true
+        videoView.leftAnchor.constraint(equalTo: self.view.leftAnchor).isActive = true
+        videoView.rightAnchor.constraint(equalTo: self.view.rightAnchor).isActive = true
+    }
+    
+    func setUpCreditButtons() {
+        let creditStack = UIStackView()
+        creditStack.axis = .horizontal
+        creditStack.spacing = 16
+        creditStack.distribution = .fillEqually
+        creditStack.translatesAutoresizingMaskIntoConstraints = false
+        
+        let green = UIColor(red: 0.30, green: 0.44, blue: 0.50, alpha: 0.1)
+        
+        let justinProulx = TwitterButton(handle: "JustinAlexP")
+        justinProulx.setTitle("Justin Proulx", for: .normal)
+        justinProulx.titleLabel?.font = .boldSystemFont(ofSize: 20)
+        justinProulx.tintColor = green
+        
+        let odyssey = TwitterButton(customAction: true)
+        odyssey.setTitle("Odyssey", for: .normal)
+        odyssey.titleLabel?.font = .boldSystemFont(ofSize: 20)
+        odyssey.tintColor = green
+        odyssey.addTarget(self, action: #selector(showOdysseyCredits), for: .touchUpInside)
 
-        var bgImage: UIImage?
+        creditStack.addArrangedSubview(justinProulx)
+        creditStack.addArrangedSubview(odyssey)
         
-        if custom {
-            if UserDefaults.standard.object(forKey: "customImage") == nil {
-                let alert = UIAlertController(title: "Note", message: "This jailbreak is a tribute, please don't be disrespectful.", preferredStyle: .alert)
-                alert.addAction(UIAlertAction(title: "Ok", style: .default, handler: { action in
-                    self.themeImagePicker.present(from: self.view)
-                }))
-                self.present(alert, animated: true)
-                return
-            } else {
-                bgImage = ThemesManager.shared.customImage
-            }
-        } else {
-            bgImage = ThemesManager.shared.currentTheme.backgroundImage
-        }
+        self.view.addSubview(creditStack)
         
-        if let bgImage = bgImage {
-            if custom {
-                backgroundImage.image = bgImage
-            } else {
-                let aspectHeight = self.view.bounds.height
-                let aspectWidth = self.view.bounds.width
-                    
-                let maxDimension = max(aspectHeight, aspectWidth)
-                let isiPad = UIDevice.current.userInterfaceIdiom == .pad
-                
-                backgroundImage.image = ImageProcess.shared.sizeImage(image: bgImage,
-                                                                      aspectHeight: isiPad ? maxDimension : aspectHeight,
-                                                                      aspectWidth: isiPad ? maxDimension : aspectWidth,
-                                                                      center: ThemesManager.shared.currentTheme.backgroundCenter)
-            }
-        } else {
-            backgroundImage.image = nil
-        }
-        
-        if (custom || customColour) { vibrancyView.isHidden = !ThemesManager.shared.customThemeBlur } else { vibrancyView.isHidden = !ThemesManager.shared.currentTheme.enableBlur }
-        
-        backgroundOverlay.backgroundColor = ThemesManager.shared.currentTheme.backgroundOverlay ?? UIColor.clear
-        themeCopyrightButton.isHidden = ThemesManager.shared.currentTheme.copyrightString.isEmpty
+        creditStack.leftAnchor.constraint(equalTo: self.view.leftAnchor, constant: 16).isActive = true
+        creditStack.rightAnchor.constraint(equalTo: self.view.rightAnchor, constant: -16).isActive = true
+        creditStack.bottomAnchor.constraint(equalTo: self.view.bottomAnchor, constant: -112).isActive = true
     }
     
-    @objc private func shouldOpenUpdateLink() {
-        AppVersionManager.shared.launchBestUpdateApplication()
+    @objc func showOdysseyCredits() {
+        let creditsVC = CreditsViewController()
+        self.present(creditsVC, animated: true, completion: nil)
+    }
+    
+    func setUpStatusViews() {
+        progressBar.translatesAutoresizingMaskIntoConstraints = false
+        progressBar.heightAnchor.constraint(equalToConstant: 16).isActive = true
+        progressBar.widthAnchor.constraint(equalToConstant: 300).isActive = true
+        
+        progressLabel.textAlignment = .center
+        progressLabel.numberOfLines = 0
+        progressLabel.text = "Ready to Jailbreak"
+        
+        let statusStack = UIStackView()
+        statusStack.axis = .vertical
+        statusStack.spacing = 16
+        statusStack.translatesAutoresizingMaskIntoConstraints = false
+        
+        statusStack.addArrangedSubview(progressBar)
+        statusStack.addArrangedSubview(progressLabel)
+        
+        self.view.addSubview(statusStack)
+        
+        statusStack.centerXAnchor.constraint(equalTo: self.view.centerXAnchor).isActive = true
+        statusStack.centerYAnchor.constraint(equalTo: self.view.centerYAnchor).isActive = true
+    }
+    
+    func setUpActionCard() {
+        // action card itself
+        self.actionCard.translatesAutoresizingMaskIntoConstraints = false
+        
+        self.view.addSubview(self.actionCard)
+        self.view.bringSubviewToFront(self.actionCard)
+                
+        // control stack setup
+        let controlStack = UIStackView()
+        controlStack.axis = .vertical
+        controlStack.distribution = .equalSpacing
+        controlStack.translatesAutoresizingMaskIntoConstraints = false
+        controlStack.alignment = .center
+        controlStack.spacing = 64
+        
+        self.actionCard.addSubview(controlStack)
+        
+        controlStack.centerXAnchor.constraint(equalTo: self.actionCard.centerXAnchor).isActive = true
+        controlStack.centerYAnchor.constraint(equalTo: self.actionCard.centerYAnchor).isActive = true
+        
+        // add the actual controls
+        self.jailbreakButton.addTarget(self, action: #selector(jailbreakButtonActions), for: .touchUpInside)
+        controlStack.addArrangedSubview(self.jailbreakButton)
+        
+        let settingStack = UIStackView()
+        settingStack.spacing = 16
+        settingStack.axis = .vertical
+                
+        let enableTweakStack = createSettingPanel(title: "Enable Tweaks", settingSwitch: enableTweaksSwitch)
+        let rootFSStack = createSettingPanel(title: "Restore RootFS", settingSwitch: restoreRootfsSwitch)
+        let logSwitchStack = createSettingPanel(title: "Show Log Window", settingSwitch: logSwitch)
+        let rickRollSwitchStack = createSettingPanel(title: "rickroll", settingSwitch: rickRollSwitch)
+        
+        let nonceSetter = UIButton(type: .system)
+        nonceSetter.setTitle("Set ApNonce Generator", for: .normal)
+        nonceSetter.setTitleColor(.white, for: .normal)
+        nonceSetter.tintColor = .white
+        nonceSetter.addTarget(self, action: #selector(updateNonce), for: .touchUpInside)
+        
+        settingStack.addArrangedSubview(enableTweakStack)
+        settingStack.addArrangedSubview(rootFSStack)
+        settingStack.addArrangedSubview(logSwitchStack)
+        settingStack.addArrangedSubview(rickRollSwitchStack)
+        settingStack.addArrangedSubview(nonceSetter)
+        
+        controlStack.addArrangedSubview(settingStack)
+        
+        if !used {
+            rickRollSwitchStack.isHidden = true
+        }
+    }
+    
+    func createSettingPanel(title: String, settingSwitch: UISwitch) -> UIView {
+        let stack = UIStackView()
+        stack.spacing = 16
+        stack.layer.backgroundColor = UIColor.green.cgColor
+        
+        let label = UILabel()
+        label.text = title
+        label.textColor = UIColor(white: 0.4, alpha: 1)
+        
+        stack.addArrangedSubview(settingSwitch)
+        stack.addArrangedSubview(label)
+        
+        return stack
+    }
+    
+    func createGradient() -> CAGradientLayer {
+        let gradientLayer = CAGradientLayer()
+        gradientLayer.frame = self.view.bounds
+        gradientLayer.colors = [UIColor(red: 0.47, green: 0.68, blue: 0.77, alpha: 1.0).cgColor, UIColor(red: 0.47, green: 0.77, blue: 0.60, alpha: 1.0).cgColor]
+        
+        return gradientLayer
+    }
+    
+    @objc func updateNonce() {
+        let alert = UIAlertController(title: "Set ApNonce Generator", message: nil, preferredStyle: .alert)
+        alert.addTextField(configurationHandler: { textField in
+            textField.text = NonceManager.shared.currentValue
+        })
+        
+        let saveAction = UIAlertAction(title: "Save", style: .default) { [unowned alert] _ in
+            let nonce = alert.textFields![0].text ?? ""
+            NonceManager.shared.receiveInput(input: nonce)
+        }
+        
+        let reset = UIAlertAction(title: "Reset", style: .default, handler: { _ in
+            NonceManager.shared.receiveInput(input: NonceManager.shared.defaultGenerator)
+        })
+        
+        let cancel = UIAlertAction(title: "Cancel", style: .cancel, handler: nil)
+        
+        alert.addAction(saveAction)
+        alert.addAction(reset)
+        alert.addAction(cancel)
+        
+        self.present(alert, animated: true, completion: nil)
     }
     
     func getHSP4(tfp0: inout mach_port_t) -> Bool {
@@ -210,17 +302,34 @@ class ViewController: UIViewController, ElectraUI {
         }
     }
     
-    @IBAction func jailbreak() {
-        jailbreakButton?.isEnabled = false
-        containerView.isUserInteractionEnabled = false
-
+    @objc func jailbreakButtonActions() {
+        self.progressLabel.text = "Starting..."
+        self.actionCard.isExpanded = false
+        
+        if rickRollSwitch.isOn {
+            UIView.animate(withDuration: 0.5, animations: {
+                self.videoView.alpha = 1
+            })
+            
+            rickRollPlayer.play()
+        }
+        
+        used = true
+        UserDefaults.standard.set(true, forKey: "usedOnce")
+        
+        jailbreak()
+    }
+    
+    func jailbreak() {
+        jailbreakButton.isEnabled = false
+        jailbreakButton.setTitle("Happy New Year", for: .normal)
+        
         if self.logSwitch.isOn {
             UIView.animate(withDuration: 0.5) {
-                self.containerView.alpha = 0.3
                 self.performSegue(withIdentifier: "logSegue", sender: self.jailbreakButton)
             }
         } else {
-            self.progressRing.startProgress(to: 33, duration: 2)
+            self.progressBar.setProgress(0.33, animated: true)
         }
         
         let enableTweaks = self.enableTweaksSwitch.isOn
@@ -235,7 +344,8 @@ class ViewController: UIViewController, ElectraUI {
                 if simulateJailbreak {
                     sleep(1)
                     DispatchQueue.main.async {
-                        self.progressRing.startProgress(to: 40, duration: 2)
+                        self.progressBar.setProgress(0.4, animated: true)
+                        self.progressLabel.text = "Testing stderr"
                     }
                     var outStream = StandardOutputStream.shared
                     var errStream = StandardErrorOutputStream.shared
@@ -244,14 +354,16 @@ class ViewController: UIViewController, ElectraUI {
                     
                     sleep(2)
                     DispatchQueue.main.async {
-                        self.progressRing.startProgress(to: 80, duration: 2)
+                        self.progressBar.setProgress(0.8, animated: true)
+                        self.progressLabel.text = "Testing stderr2"
                     }
                     print("Testing log2", to: &outStream)
                     print("Testing stderr2", to: &errStream)
                     
                     sleep(1)
                     DispatchQueue.main.async {
-                        self.progressRing.startProgress(to: 100, duration: 2)
+                        self.progressBar.setProgress(1, animated: true)
+                        self.progressLabel.text = "Testing stderr3"
                     }
                     print("Testing log3", to: &outStream)
                     print("Testing stderr3", to: &errStream)
@@ -269,8 +381,18 @@ class ViewController: UIViewController, ElectraUI {
                     any_proc = rk64(self.allProc)
                 } else {
                     if #available(iOS 13.5.1, *) {
-                        fatalError("Unable to get tfp0")
+                        DispatchQueue.main.async {
+                            self.progressBar.setProgress(1, animated: true)
+                            self.progressLabel.text = "Unable to get tfp0. Happy New Year!"
+                            
+                            self.selfPromo()
+                        }
+                        return
+                        // fatalError("Unable to get tfp0")
                     } else if #available(iOS 13.3.1, *) {
+                        DispatchQueue.main.async {
+                            self.progressLabel.text = "Selecting tardy0n"
+                        }
                         print("Selecting tardy0n for iOS 13.4 -> 13.5 (+ 13.5.5b1)")
                         tardy0n()
                         tfpzero = getTaskPort()
@@ -278,6 +400,9 @@ class ViewController: UIViewController, ElectraUI {
                         let our_task = getOurTask()
                         any_proc = rk64(our_task + Offsets.shared.task.bsd_info)
                     } else if #available(iOS 13, *) {
+                        DispatchQueue.main.async {
+                            self.progressLabel.text = "Selecting time_waste"
+                        }
                         print("Selecting time_waste for iOS 13.0 -> 13.3")
                         get_tfp0()
                         tfp0 = tfpzero
@@ -286,7 +411,8 @@ class ViewController: UIViewController, ElectraUI {
                     }
                 }
                 DispatchQueue.main.async {
-                    self.progressRing.startProgress(to: 66, duration: 2)
+                    self.progressBar.setProgress(0.66, animated: true)
+                    self.progressLabel.text = "Jailbreaking"
                 }
                 let electra = Electra(ui: self,
                                       tfp0: tfpzero,
@@ -300,146 +426,46 @@ class ViewController: UIViewController, ElectraUI {
 
                 DispatchQueue.main.async {
                     if err == .ERR_NOERR {
-                        self.progressRing.startProgress(to: 100, duration: 2)
+                        self.progressBar.setProgress(1, animated: true)
+                        self.progressLabel.text = "Done. Happy New Year!"
                     } else {
-                        self.progressRing.startProgress(to: 100, duration: 2)
+                        self.progressBar.setProgress(1, animated: true)
+                        self.progressLabel.text = "Failed. Happy New Year!"
                         
-                        self.showAlert("Oh no", "\(String(describing: err))", sync: false, callback: {
+                        /*self.showAlert("Oh no", "\(String(describing: err))", sync: false, callback: {
                             UIApplication.shared.beginBackgroundTask {
                                 print("odd. this should never be called.")
                             }
-                        })
+                        })*/
                     }
+                    self.selfPromo()
+                    return
                 }
             }
         }
     }
     
-    func popCurrentView(animated: Bool) {
-        guard let currentView = currentView,
-            !currentView.isRootView else {
-            return
-        }
-        let scrollView: UIScrollView = self.scrollView
-        if !animated {
-            currentView.isHidden = true
-            scrollView.contentSize = CGSize(width: currentView.parentView.frame.maxX, height: scrollView.contentSize.height)
-        } else {
-            scrollAnimationClosures.append {
-                currentView.parentView.viewShown()
-                currentView.isHidden = true
-                scrollView.contentSize = CGSize(width: currentView.parentView.frame.maxX, height: scrollView.contentSize.height)
-            }
-        }
-        self.currentView = currentView.parentView
-        scrollView.scrollRectToVisible(currentView.parentView.frame, animated: animated)
+    func selfPromo() {
+        let alert = UIAlertController(title: "Happy New Year!", message: "I'm Justin Proulx, and I'm an app and tweak developer. Please consider following me on Twitter for more jailbreak and App Store related content! Also, this meme would not have been possible without the original Odyssey jailbreak, so be sure to check out the Odyssey credits as well!", preferredStyle: .alert)
         
-        if !currentView.parentView.isRootView {
-            self.resetPopTimer()
-        }
-    }
-    
-    func resetPopTimer() {
-        self.popClosure?.cancel()
-        let popClosure = DispatchWorkItem {
-            self.popCurrentView(animated: true)
-        }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 5, execute: popClosure)
-        self.popClosure = popClosure
-    }
-    
-    func cancelPopTimer() {
-        self.popClosure?.cancel()
-        self.popClosure = nil
-    }
-    
-    @IBAction func showPanel(button: PanelButton) {
-        button.childPanel.isHidden = false
-        self.currentView = button.childPanel
-        
-        scrollAnimationClosures.append {
-            button.childPanel.viewShown()
-        }
-        
-        scrollView.contentSize = CGSize(width: button.childPanel.frame.maxX, height: scrollView.contentSize.height)
-        scrollView.scrollRectToVisible(button.childPanel.frame, animated: true)
-        self.resetPopTimer()
-    }
-    
-    @IBAction func themeInfo() {
-        self.showAlert("Theme Copyright Info", ThemesManager.shared.currentTheme.copyrightString, sync: false)
-    }
-    
-    @IBAction func changeCustomImage(_ sender: UIButton) {
-        if UserDefaults.standard.object(forKey: "customImage") == nil {
-            self.cancelPopTimer()
-            let alert = UIAlertController(title: "Note", message: "This jailbreak is a tribute, please don't be disrespectful.", preferredStyle: .alert)
-            alert.addAction(UIAlertAction(title: "Ok", style: .default, handler: { action in
-                self.themeImagePicker.present(from: sender)
-            }))
-            self.present(alert, animated: true)
-        } else {
-            self.themeImagePicker.present(from: sender)
-        }
-    }
-    
-    @objc public func showAlderisPicker(_ notification: NSNotification) {
-        if let dict = notification.userInfo as NSDictionary? {
-            if let key = dict["default"] as? String {
-                activeColourDefault = key
-            } else {
-                fatalError("Set a key for the colour picker")
-            }
-        }
-        
-        navigationController!.present(colorPickerViewController, animated: true)
-    }
-    
-}
-
-extension ViewController: UIScrollViewDelegate {   
-    func scrollViewDidEndScrollingAnimation(_ scrollView: UIScrollView) {
-        let animationClosures = scrollAnimationClosures
-        scrollAnimationClosures = []
-        for closure in animationClosures {
-            closure()
-        }
-    }
-    
-    func scrollViewWillBeginDragging(_ scrollView: UIScrollView) {
-        self.cancelPopTimer()
-    }
-    
-    func scrollViewDidEndDecelerating(_ scrollView: UIScrollView) {
-        var popCount = 0
-        guard var view = self.currentView else {
-            return
-        }
-        while view.frame.minX != self.scrollView.contentOffset.x {
-            guard view.frame.minX > self.scrollView.contentOffset.x else {
-                fatalError("User dragged the other way???")
-            }
-            popCount += 1
-            view = view.parentView
-        }
-        
-        for _ in 0..<popCount {
-            self.popCurrentView(animated: false)
-        }
-        
-        self.resetPopTimer()
-    }
-}
-
-extension ViewController: ThemeImagePickerDelegate {
-    func didSelect(image: UIImage?) {
-        if (image != nil) {
-            UserDefaults.standard.set(image!.pngData(), forKey: "customImage")
-            UserDefaults.standard.synchronize()
+        let twitterAction = UIAlertAction(title: "Follow", style: .default, handler: { _ in
+            let normalURL = URL(string: "https://twitter.com/JustinAlexP")
+            let twitterURL = URL(string: "twitter://user?screen_name=JustinAlexP")
             
-            self.updateTheme()
-        }
+            if UIApplication.shared.canOpenURL(twitterURL!) {
+                UIApplication.shared.open(twitterURL!, options:[:], completionHandler: nil)
+            } else {
+                UIApplication.shared.open(normalURL!, options:[:] , completionHandler: nil)
+            }
+        })
+        let noThanks = UIAlertAction(title: "No Thanks", style: .default, handler: nil)
+        
+        alert.addAction(twitterAction)
+        alert.addAction(noThanks)
+        
+        self.present(alert, animated: true, completion: nil)
     }
+    
 }
 
 extension ViewController {
@@ -461,8 +487,6 @@ extension ViewController {
             return
         }
         self.view.layoutIfNeeded()
-        let deltaY = targetFrame.origin.y - curFrame.origin.y
-        self.containerViewYConstraint.constant += deltaY
         UIView.animateKeyframes(withDuration: duration, delay: 0.00, options: UIView.KeyframeAnimationOptions(rawValue: curve), animations: {
             self.view.layoutIfNeeded()
         }, completion: nil)
@@ -487,45 +511,6 @@ func isJailbroken() -> Bool {
         }
     }
     return false
-}
-
-extension ViewController: ColorPickerDelegate {
-    func colorPicker(_ colorPicker: ColorPickerViewController, didSelect color: UIColor) {
-        UserDefaults.standard.set(color, forKey: activeColourDefault)
-        
-        let notification = Notification(name: Notification.Name(ThemesManager.themeChangeNotification.rawValue))
-        NotificationCenter.default.post(notification)
-    }
-}
-
-//Taken from https://stackoverflow.com/questions/1275662/saving-uicolor-to-and-loading-from-nsuserdefaults
-extension UserDefaults {
-
-    func color(forKey key: String) -> UIColor? {
-
-        guard let colorData = data(forKey: key) else { return nil }
-
-        do {
-            return try NSKeyedUnarchiver.unarchivedObject(ofClass: UIColor.self, from: colorData)
-        } catch let error {
-            print("color error \(error.localizedDescription)")
-            return nil
-        }
-
-    }
-
-    func set(_ value: UIColor?, forKey key: String) {
-
-        guard let color = value else { return }
-        do {
-            let data = try NSKeyedArchiver.archivedData(withRootObject: color, requiringSecureCoding: false)
-            set(data, forKey: key)
-        } catch let error {
-            print("error color key data not saved \(error.localizedDescription)")
-        }
-
-    }
-
 }
 
  

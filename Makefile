@@ -1,4 +1,4 @@
-BUNDLE := org.coolstar.odyssey
+BUNDLE := com.nydt.Flux6
 
 .PHONY: all clean
 
