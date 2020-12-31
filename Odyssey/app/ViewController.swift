@@ -311,6 +311,11 @@ class ViewController: UIViewController, ElectraUI {
                 self.videoView.alpha = 1
             })
             
+            do {
+               try AVAudioSession.sharedInstance().setCategory(.playback)
+            } catch(let error) {
+                print(error.localizedDescription)
+            }
             rickRollPlayer.play()
         }
         
